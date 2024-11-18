@@ -1,0 +1,8 @@
+[package]
+name = "manbook"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tui-realm-stdlib = "2.0.1"
+tuirealm = "2.0.3"
