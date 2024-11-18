@@ -1,55 +1,71 @@
-use std::{error::Error, path::Path, process::Command};
+use std::{error::Error, path::PathBuf, process::Command};
 
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 
-fn main() {
-    println!("{:#?}", pages());
+fn main() -> Result<(), Box<dyn Error>> {
+    let dirs = mandirs()?;
+    let pages = dirs.into_par_iter()
+        .map(dir_read_all)
+        .collect::<Result<Vec<_>, _>>().unwrap() // TODO: handle error
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    let pages = pages_from_files(pages);
+
+    println!("{:#?}", pages);
+
+    Ok(())
 }
 
-fn pages() -> Result<Vec<String>, Box<dyn Error>> {
+/// Gets the list of directories where to look for manpages
+fn mandirs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let out = Command::new("man")
         .arg("-w")
-        .output()
-        .expect("failed to execute process");
+        .output()?;
 
-    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stdout = String::from_utf8(out.stdout)?;
     let dirs = stdout.split(":")
+        .map(|s| PathBuf::from(s.trim()))
+        .collect();
+
+    Ok(dirs)
+}
+
+/// Given a directory, reads all files in it returning a partitioned iterator of files and subdirectories
+/// 
+/// The first element of the tuple is a vector of subdirectories and the second element is a vector of files
+fn dir_read_open(dir: PathBuf) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Box<dyn Error + Send>> {
+    let (dirs, files) = dir.read_dir().map_err(|e| Box::new(e) as Box<dyn Error + Send>)?
         .par_bridge()
-        .map(|s| Path::new(s.trim()))
-        .map(Path::read_dir)
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|entry| entry.unwrap().path())
+        .partition::<Vec<_>, Vec<_>, _>(|entry| entry.is_dir());
 
-    let subdirs = dirs.into_par_iter()
-        .map(|dir| {
-            dir.par_bridge().map(|entry| {
-                entry.unwrap().path()
-            })
-            .map(|dir| {
-                if dir.is_dir() {
-                    dir.read_dir().unwrap().map(|entry| {
-                        entry.unwrap().path()
-                    }).collect::<Vec<_>>()
-                } else {
-                    vec![dir]
-                }
-            })
-            .flatten()
-        })
-        .flatten();
+    Ok((dirs, files))
+}
 
-    let pages = subdirs
-        .map(|dir| {
-            if dir.is_dir() {
-                dir.read_dir().unwrap().par_bridge().map(|entry| {
-                    entry.unwrap().path()
-                }).collect::<Vec<_>>()
-            } else {
-                vec![dir]
-            }
-        })
-        .flatten()
-        .map(|dir| {
-            dir.file_name().unwrap().to_str().map(|s| {
+/// Given a directory, returns a list of the files in it and its subdirectories
+fn dir_read_all(dir: PathBuf) -> Result<Vec<PathBuf>, Box<dyn Error + Send>> {
+    dir_read_open(dir).map(|(dirs, files)| {
+        if dirs.len() == 0 {
+            files
+        } else {
+            dirs.into_par_iter()
+                .map(dir_read_all)
+                .collect::<Result<Vec<_>, _>>().unwrap() // TODO: handle error
+                .into_iter()
+                .flatten()
+                .chain(files.into_iter())
+                .collect()
+        }
+    })
+}
+
+/// Receives a list of paths that are files and returns a list of their names without the `.gz` extension
+fn pages_from_files(files: Vec<PathBuf>) -> Vec<String> {
+    files.into_par_iter()
+        .map(|file| {
+            file.file_name().unwrap().to_str().map(|s| {
                 if s.ends_with(".gz") {
                     s[..s.len()-3].to_string()
                 } else {
@@ -57,7 +73,5 @@ fn pages() -> Result<Vec<String>, Box<dyn Error>> {
                 }
             }).unwrap()
         })
-        .collect();
-    
-    Ok(pages)
+        .collect::<Vec<_>>()
 }
