@@ -1,5 +1,7 @@
 use std::{error::Error, path::Path, process::Command};
 
+use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
+
 fn main() {
     println!("{:#?}", pages());
 }
@@ -12,13 +14,14 @@ fn pages() -> Result<Vec<String>, Box<dyn Error>> {
 
     let stdout = String::from_utf8(out.stdout).unwrap();
     let dirs = stdout.split(":")
+        .par_bridge()
         .map(|s| Path::new(s.trim()))
         .map(Path::read_dir)
         .collect::<Result<Vec<_>, _>>()?;
 
-    let subdirs = dirs.into_iter()
+    let subdirs = dirs.into_par_iter()
         .map(|dir| {
-            dir.map(|entry| {
+            dir.par_bridge().map(|entry| {
                 entry.unwrap().path()
             })
             .map(|dir| {
@@ -37,7 +40,7 @@ fn pages() -> Result<Vec<String>, Box<dyn Error>> {
     let pages = subdirs
         .map(|dir| {
             if dir.is_dir() {
-                dir.read_dir().unwrap().map(|entry| {
+                dir.read_dir().unwrap().par_bridge().map(|entry| {
                     entry.unwrap().path()
                 }).collect::<Vec<_>>()
             } else {
